@@ -1035,29 +1035,21 @@ body::before {
 }
 .btn-deletar-registro:hover { background:rgba(255,48,48,.2); border-color:rgba(255,48,48,.6); }
 
-/* ═══════════════════════════════════════════
-   BOTÃO PESAGEM FINALIZADA (Balanção)
-═══════════════════════════════════════════ */
-.btn-pesagem-finalizada {
-  width:100%; margin-top:4px;
-  padding:14px 18px;
-  background:linear-gradient(135deg,#005c2e,#00a854);
-  border:none; border-radius:10px; color:#fff;
-  font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:16px; letter-spacing:2px;
-  cursor:pointer; transition:all .25s;
-  box-shadow:0 4px 18px rgba(0,168,84,.35);
-  display:flex; align-items:center; justify-content:center; gap:10px;
+/* Botão finalizar pesagem — envia ao Administrativo */
+.btn-finalizar-pesagem {
+  padding:13px 20px; border-radius:10px;
+  background:linear-gradient(135deg,#8a5a00,#c47c00);
+  border:none; color:#fff;
+  font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:15px; letter-spacing:2px;
+  cursor:pointer; transition:all .25s; align-self:flex-start;
+  box-shadow:0 4px 18px rgba(196,124,0,.4);
+  display:flex; align-items:center; gap:8px;
 }
-.btn-pesagem-finalizada:hover {
-  filter:brightness(1.15);
-  transform:translateY(-2px);
-  box-shadow:0 8px 28px rgba(0,168,84,.5);
-}
-.btn-pesagem-finalizada:active { transform:translateY(0); }
-.btn-pesagem-finalizada-wrap {
-  border-top:1px solid rgba(139,0,255,.2);
-  padding-top:14px;
-  margin-top:2px;
+.btn-finalizar-pesagem:hover { filter:brightness(1.15); transform:translateY(-2px); }
+.btn-finalizar-pesagem:disabled { opacity:.4; cursor:not-allowed; transform:none; }
+
+.balancao-acoes-row {
+  display:flex; gap:10px; flex-wrap:wrap; align-items:center;
 }
 </style>
 </head>
@@ -2020,19 +2012,6 @@ function criarCardBalancao(reg, idx){
   const body = details.querySelector(`#detailBody_${idx}`);
   body.appendChild(criarGaleriaFotos(reg, idx));
   body.appendChild(criarFormFotos(reg, idx));
-
-  /* ── BOTÃO PESAGEM FINALIZADA (ADIÇÃO) ── */
-  const wrapPesagem = document.createElement('div');
-  wrapPesagem.className = 'btn-pesagem-finalizada-wrap';
-  const nomeEscapado = reg.nome.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-  wrapPesagem.innerHTML = `
-    <button class="btn-pesagem-finalizada" onclick="pesagemFinalizada('${nomeEscapado}')">
-      ✅ PESAGEM FINALIZADA — ENVIAR PARA FINALIZAR
-    </button>
-  `;
-  body.appendChild(wrapPesagem);
-  /* ── FIM ADIÇÃO ── */
-
   body.appendChild(criarBtnDeletar(idx));
 
   return details;
@@ -2259,10 +2238,23 @@ window.adicionarRegistroBalancao = function(){
 };
 
 function criarBtnDeletar(idx){
-  const btn = document.createElement('button');
-  btn.className = 'btn-deletar-registro';
-  btn.textContent = '🗑 Excluir este registro';
-  btn.onclick = () => {
+  const wrap = document.createElement('div');
+  wrap.className = 'balancao-acoes-row';
+
+  /* ── Botão Finalizar Pesagem ── */
+  const btnFinalizar = document.createElement('button');
+  btnFinalizar.className = 'btn-finalizar-pesagem';
+  btnFinalizar.innerHTML = '⚖️ FINALIZAR PESAGEM → ADMINISTRATIVO';
+  btnFinalizar.onclick = async () => {
+    await finalizarPesagemBalancao(idx);
+  };
+  wrap.appendChild(btnFinalizar);
+
+  /* ── Botão Excluir ── */
+  const btnDel = document.createElement('button');
+  btnDel.className = 'btn-deletar-registro';
+  btnDel.textContent = '🗑 Excluir este registro';
+  btnDel.onclick = () => {
     if(!confirm('Excluir este registro e todas as fotos?')) return;
     const dados = balancaoCarregarDados();
     dados.splice(idx, 1);
@@ -2270,41 +2262,60 @@ function criarBtnDeletar(idx){
     toast('🗑 Registro excluído.');
     balancaoAtualizar();
   };
-  return btn;
+  wrap.appendChild(btnDel);
+
+  return wrap;
 }
 
 /* ────────────────────────────────────────────
-   PESAGEM FINALIZADA (Balanção → Aba Finalizar)
-   Envia somente o nome para a fila com balancaOk=true,
-   aparecendo diretamente na aba FINALIZAR (Financeiro).
+   FINALIZAR PESAGEM — remove do BALANÇÃO e
+   envia para a aba ADMINISTRATIVO (Firebase fila)
 ──────────────────────────────────────────── */
-window.pesagemFinalizada = async function(nome) {
+async function finalizarPesagemBalancao(idx){
   if(!db){
-    toast('⚠ Conecte ao Firebase nas Configurações primeiro!');
-    abrirSetup();
+    toast('⚠ Configure o Firebase primeiro! (⚙ Configurações)');
     return;
   }
-  if(!confirm('Pesagem de "' + nome + '" finalizada?\nIsso vai enviar o nome para a aba FINALIZAR.')) return;
+
+  const dados = balancaoCarregarDados();
+  const reg   = dados[idx];
+  if(!reg) return;
+
+  const btnFin = document.querySelectorAll('.btn-finalizar-pesagem')[idx];
+  if(btnFin){ btnFin.disabled = true; btnFin.textContent = '⏳ ENVIANDO...'; }
+
   try {
+    /* Envia para o Firebase como um item novo na fila (etapa ADMINISTRATIVO) */
     await push(ref(db,'fila'),{
-      nome: nome,
-      ts: Date.now(),
-      por: meuNome,
-      porId: meuId,
-      operacao: 'PESAGEM BALANÇÃO',
-      sucata: '',
-      balancaOk: true,
-      balancaTs: Date.now(),
-      balancaPor: meuNome,
-      balancaFinId: meuId,
+      nome:         reg.nome,
+      ts:           Date.now(),
+      por:          meuNome,
+      porId:        meuId,
+      operacao:     'VENDEU MATERIAL',   /* padrão para pesagem */
+      sucata:       'TEM SUCATA',
+      balancaOk:    false,
       financeiroOk: false,
-      origemBalancao: true
+      origemBalancao: true,
+      placaBalancao:  reg.placa || '',
+      horaBalancao:   reg.hora  || '',
     });
-    toast('✅ "' + nome + '" enviado para a aba FINALIZAR!');
-  } catch(e) {
+
+    /* Remove do localStorage do BALANÇÃO */
+    dados.splice(idx, 1);
+    balancaoSalvarDados(dados);
+
+    toast('✅ "' + reg.nome + '" enviado ao ADMINISTRATIVO!');
+    balancaoAtualizar();
+
+    /* Navega automaticamente para a aba ADMINISTRATIVO */
+    const navBalanca = document.getElementById('nav-balanca');
+    if(navBalanca) trocarAba('balanca', navBalanca);
+
+  } catch(e){
+    if(btnFin){ btnFin.disabled = false; btnFin.innerHTML = '⚖️ FINALIZAR PESAGEM → ADMINISTRATIVO'; }
     alert('Erro ao enviar: ' + e.message);
   }
-};
+}
 
 /* Lightbox */
 window.abrirLightbox = function(src, legenda){
